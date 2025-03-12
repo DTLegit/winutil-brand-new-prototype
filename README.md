@@ -34,10 +34,10 @@ Winutil must be run in Admin mode because it performs system-wide tweaks. To ach
 
 ### Launch Command
 
-#### Stable Branch (Recommended)
+#### Command to launch this prototype version. 
 
 ```ps1
-irm "https://tinyurl.com/dtlegit-winutil" | iex
+irm "https://tinyurl.com/DTLegit-Win" | iex
 ```
 
 If you have Issues, refer to [Known Issues](https://christitustech.github.io/winutil/KnownIssues/)

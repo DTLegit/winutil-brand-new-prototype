@@ -21,6 +21,7 @@ function Invoke-WPFFixesUpdate {
         11. Gets and deletes all BITS jobs
         12. Sets the startup type of the Windows Update Services then starts them
         13. Forces Windows Update to check for updates
+        14. Calls on the Invoke-WPFUpdatesdefault function to ensure any settings or tasks specific to WinUtil's Update Scripts has been completely reset.
 
     .PARAMETER Aggressive
         If specified, the script will take additional steps to repair Windows Update that are more dangerous, take a significant amount of time, or are generally unnecessary
@@ -200,6 +201,9 @@ function Invoke-WPFFixesUpdate {
     Write-Progress -Id 0 -Activity "Repairing Windows Update" -Status "Completed" -PercentComplete 100
 
     Set-WinUtilTaskbaritem -state "None" -overlay "checkmark"
+
+    Invoke-WPFUpdatesdefault
+    Write-Host "WPFUpdatesdefault script has been ran. Any settings that may have been changed by the WinUtil update scripts should have been reverted..."
 
     $ButtonType = [System.Windows.MessageBoxButton]::OK
     $MessageboxTitle = "Reset Windows Update "

@@ -7,6 +7,17 @@
 
 This utility is a compilation of Windows tasks I perform on each Windows system I use. It is meant to streamline *installs*, debloat with *tweaks*, troubleshoot with *config*, and fix Windows *updates*. I am extremely picky about any contributions to keep this project clean and efficient.
 
+This is a version of WinUtil that has been updated with various fixes, renovations, and improvements to the original CTT WinUtil's Edge Removal and Windows Update functions.
+
+**NOTE: This is NOT the official GitHub Repository for Chris Titus Tech's WinUtil. This is just for submitting some eventual PR's that are going to be made into the mainline version of WinUtil.**
+
+**For right now, this version of WinUtil as it is currently in this repository is for non-production testing purposes ONLY. If you decide to do otherwise, then you are doing so at your own risk.**
+
+***You have been warned!***
+
+**Please feel free to help test this version of WinUtil that is within this repository and submit any bugs reports / issues and GitHub commits that you may have. Any Pull Requests that can help fix any bugs, introduce code improvements, add any
+additional meaningful features, or improve code quality and efficiency would help tremendously and is highly encouraged. Thank you to anyone in advance who elects to do so.**
+
 ![screen-install](/docs/assets/images/Title-Screen.png)
 
 ## 💡 Usage
@@ -24,12 +35,18 @@ Winutil must be run in Admin mode because it performs system-wide tweaks. To ach
 
 ### Launch Command
 
-#### Stable Branch (Recommended)
+#### Command to launch this prototype version.
+
+```ps1
+irm "https://tinyurl.com/DTLegit-Win" | iex
+```
+
+#### Upstream Stable Branch
 
 ```ps1
 irm "https://christitus.com/win" | iex
 ```
-#### Dev Branch
+#### Upstream Dev Branch
 
 ```ps1
 irm "https://christitus.com/windev" | iex

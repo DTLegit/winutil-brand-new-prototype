@@ -55,7 +55,8 @@ function Invoke-WPFButton {
         "WPFClearTweaksSelection" {Invoke-WPFPresets -imported $true -checkboxfilterpattern "WPFTweak*"}
         "WPFClearInstallSelection" {Invoke-WPFPresets -imported $true -checkboxfilterpattern "WPFInstall*"}
         "WPFtweaksbutton" {Invoke-WPFtweaksbutton}
-        "WPFOOSUbutton" {Invoke-WPFOOSU}
+        "WPFOOSUbutton" {Invoke-WPFOOSUAuto -customize -silent}
+        "WPFLaunchWin11DebloatButton" {Invoke-WPFLaunchWin11DebloatButton}
         "WPFAddUltPerf" {Invoke-WPFUltimatePerformance -Do}
         "WPFRemoveUltPerf" {Invoke-WPFUltimatePerformance}
         "WPFundoall" {Invoke-WPFundoall}

@@ -21,10 +21,6 @@ function Invoke-WinUtilTweaks {
         $KeepServiceStartup = $true
     )
 
-    if ($Checkbox -contains "Toggle") {
-        $CheckBox = $sync.configs.tweaks.$CheckBox
-    }
-
     Write-Debug "Tweaks: $($CheckBox)"
     if($undo) {
         $Values = @{
@@ -54,7 +50,7 @@ function Invoke-WinUtilTweaks {
         $sync.configs.tweaks.$CheckBox.service | ForEach-Object {
             $changeservice = $true
 
-        # The check for !($undo) is required, without it the script will throw an error for accessing unavailable memeber, which's the 'OriginalService' Property
+        # The check for !($undo) is required, without it the script will throw an error for accessing unavailable member, which's the 'OriginalService' Property
             if($KeepServiceStartup -AND !($undo)) {
                 try {
                     # Check if the service exists
@@ -64,7 +60,7 @@ function Invoke-WinUtilTweaks {
                         $changeservice = $false
                     }
                 } catch [System.ServiceProcess.ServiceNotFoundException] {
-                    Write-Warning "Service $($psitem.Name) was not found"
+                    Write-Warning "Service $($psitem.Name) was not found."
                 }
             }
 
@@ -80,9 +76,9 @@ function Invoke-WinUtilTweaks {
             if (($psitem.Path -imatch "hku") -and !(Get-PSDrive -Name HKU -ErrorAction SilentlyContinue)) {
                 $null = (New-PSDrive -PSProvider Registry -Name HKU -Root HKEY_USERS)
                 if (Get-PSDrive -Name HKU -ErrorAction SilentlyContinue) {
-                    Write-Debug "HKU drive created successfully"
+                    Write-Debug "HKU drive created successfully."
                 } else {
-                    Write-Debug "Failed to create HKU drive"
+                    Write-Debug "Failed to create HKU drive."
                 }
             }
             Set-WinUtilRegistry -Name $psitem.Name -Path $psitem.Path -Type $psitem.Type -Value $psitem.$($values.registry)

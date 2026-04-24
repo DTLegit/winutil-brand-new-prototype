@@ -1,16 +1,31 @@
+# Create enums
+Add-Type @"
+public enum PackageManagers
+{
+    Winget,
+    Choco
+}
+"@
+
 # SPDX-License-Identifier: MIT
 # Set the maximum number of threads for the RunspacePool to the number of threads on the machine
 $maxthreads = [int]$env:NUMBER_OF_PROCESSORS
 
 # Create a new session state for parsing variables into our runspace
 $hashVars = New-object System.Management.Automation.Runspaces.SessionStateVariableEntry -ArgumentList 'sync',$sync,$Null
+$debugVar = New-object System.Management.Automation.Runspaces.SessionStateVariableEntry -ArgumentList 'DebugPreference',$DebugPreference,$Null
+$uiVar = New-object System.Management.Automation.Runspaces.SessionStateVariableEntry -ArgumentList 'PARAM_NOUI',$PARAM_NOUI,$Null
+$offlineVar = New-object System.Management.Automation.Runspaces.SessionStateVariableEntry -ArgumentList 'PARAM_OFFLINE',$PARAM_OFFLINE,$Null
 $InitialSessionState = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
 
 # Add the variable to the session state
 $InitialSessionState.Variables.Add($hashVars)
+$InitialSessionState.Variables.Add($debugVar)
+$InitialSessionState.Variables.Add($uiVar)
+$InitialSessionState.Variables.Add($offlineVar)
 
 # Get every private function and add them to the session state
-$functions = Get-ChildItem function:\ | Where-Object { $_.Name -imatch 'winutil|Microwin|WPF' }
+$functions = Get-ChildItem function:\ | Where-Object { $_.Name -imatch 'winutil|WPF' }
 foreach ($function in $functions) {
     $functionDefinition = Get-Content function:\$($function.name)
     $functionEntry = New-Object System.Management.Automation.Runspaces.SessionStateFunctionEntry -ArgumentList $($function.name), $functionDefinition
@@ -46,6 +61,41 @@ class GenericException : Exception {
     GenericException($Message) : base($Message) {}
 }
 
+# Load the configuration files
+
+$sync.configs.applicationsHashtable = @{}
+$sync.configs.applications.PSObject.Properties | ForEach-Object {
+    $sync.configs.applicationsHashtable[$_.Name] = $_.Value
+}
+
+Set-Preferences
+
+if ($PARAM_NOUI) {
+    Show-CTTLogo
+    if ($PARAM_CONFIG -and -not [string]::IsNullOrWhiteSpace($PARAM_CONFIG)) {
+        Write-Host "Running config file tasks..."
+        Invoke-WPFImpex -type "import" -Config $PARAM_CONFIG
+        if ($PARAM_RUN) {
+            Invoke-WinUtilAutoRun
+        }
+        else {
+            Write-Host "Did you forget to add '--Run'?";
+        }
+        $sync.runspace.Dispose()
+        $sync.runspace.Close()
+        [System.GC]::Collect()
+        Stop-Transcript
+        exit 1
+    }
+    else {
+        Write-Host "Cannot automatically run without a config file provided."
+        $sync.runspace.Dispose()
+        $sync.runspace.Close()
+        [System.GC]::Collect()
+        Stop-Transcript
+        exit 1
+    }
+}
 
 $inputXML = $inputXML -replace 'mc:Ignorable="d"', '' -replace "x:N", 'N' -replace '^<Win.*', '<Window'
 
@@ -106,31 +156,19 @@ $sync.Form.Add_Loaded({
     })
 })
 
-Invoke-WinutilThemeChange -init $true
-# Load the configuration files
+Invoke-WinutilThemeChange -theme $sync.preferences.theme
 
-$noimage = "https://images.emojiterra.com/google/noto-emoji/unicode-15/color/512px/1f4e6.png"
-$noimage = [Windows.Media.Imaging.BitmapImage]::new([Uri]::new($noimage))
-
-$sync.configs.applicationsHashtable = @{}
-$sync.configs.applications.PSObject.Properties | ForEach-Object {
-    $sync.configs.applicationsHashtable[$_.Name] = $_.Value
-}
 
 # Now call the function with the final merged config
 Invoke-WPFUIElements -configVariable $sync.configs.appnavigation -targetGridName "appscategory" -columncount 1
-# Add logic to handle click to the ToggleView Button on the Install Tab
-$sync.WPFToggleView.Add_Click({
-    $sync.CompactView = -not $sync.CompactView
-    Update-AppTileProperties
-    if ($sync.SearchBar.Text -eq "") {
-        Set-CategoryVisibility -Category "*"
-    }
-})
-Invoke-WPFUIApps -Apps $sync.configs.applicationsHashtable -targetGridName "appspanel"
+Initialize-WPFUI -targetGridName "appscategory"
+
+Initialize-WPFUI -targetGridName "appspanel"
 
 Invoke-WPFUIElements -configVariable $sync.configs.tweaks -targetGridName "tweakspanel" -columncount 2
+
 Invoke-WPFUIElements -configVariable $sync.configs.feature -targetGridName "featurespanel" -columncount 2
+
 # Future implementation: Add Windows Version to updates panel
 #Invoke-WPFUIElements -configVariable $sync.configs.updates -targetGridName "updatespanel" -columncount 1
 
@@ -140,12 +178,19 @@ Invoke-WPFUIElements -configVariable $sync.configs.feature -targetGridName "feat
 
 $xaml.SelectNodes("//*[@Name]") | ForEach-Object {$sync["$("$($psitem.Name)")"] = $sync["Form"].FindName($psitem.Name)}
 
-#Persist the Chocolatey preference across winutil restarts
-$ChocoPreferencePath = "$env:LOCALAPPDATA\winutil\preferChocolatey.ini"
-$sync.ChocoRadioButton.Add_Checked({New-Item -Path $ChocoPreferencePath -Force })
-$sync.ChocoRadioButton.Add_Unchecked({Remove-Item $ChocoPreferencePath -Force})
-if (Test-Path $ChocoPreferencePath) {
-   $sync.ChocoRadioButton.IsChecked = $true
+#Persist Package Manager preference across winutil restarts
+$sync.ChocoRadioButton.Add_Checked({
+    $sync.preferences.packagemanager = [PackageManagers]::Choco
+    Set-Preferences -save
+})
+$sync.WingetRadioButton.Add_Checked({
+    $sync.preferences.packagemanager = [PackageManagers]::Winget
+    Set-Preferences -save
+})
+
+switch ($sync.preferences.packagemanager) {
+    "Choco" {$sync.ChocoRadioButton.IsChecked = $true; break}
+    "Winget" {$sync.WingetRadioButton.IsChecked = $true; break}
 }
 
 $sync.keys | ForEach-Object {
@@ -184,14 +229,13 @@ $sync.keys | ForEach-Object {
 # Load computer information in the background
 Invoke-WPFRunspace -ScriptBlock {
     try {
-        $oldProgressPreference = $ProgressPreference
         $ProgressPreference = "SilentlyContinue"
         $sync.ConfigLoaded = $False
         $sync.ComputerInfo = Get-ComputerInfo
         $sync.ConfigLoaded = $True
     }
     finally{
-        $ProgressPreference = "Continue"
+        $ProgressPreference = $oldProgressPreference
     }
 
 } | Out-Null
@@ -201,33 +245,7 @@ Invoke-WPFRunspace -ScriptBlock {
 #===========================================================================
 
 # Print the logo
-Invoke-WPFFormVariables
-$sync.CompactView = $false
-$sync.Form.Resources.AppTileWidth = [double]::NaN
-$sync.Form.Resources.AppTileCompactVisibility = [Windows.Visibility]::Visible
-$sync.Form.Resources.AppTileFontSize = [double]16
-$sync.Form.Resources.AppTileMargins = [Windows.Thickness]5
-$sync.Form.Resources.AppTileBorderThickness = [Windows.Thickness]0
-function Update-AppTileProperties {
-    if ($sync.CompactView -eq $true) {
-        $sync.Form.Resources.AppTileWidth = [double]::NaN
-        $sync.Form.Resources.AppTileCompactVisibility = [Windows.Visibility]::Collapsed
-        $sync.Form.Resources.AppTileFontSize = [double]12
-        $sync.Form.Resources.AppTileMargins = [Windows.Thickness]2
-        $sync.Form.Resources.AppTileBorderThickness = [Windows.Thickness]0
-    }
-    else {
-        $sync.Form.Resources.AppTileWidth = $sync.ItemsControl.ActualWidth -20
-        $sync.Form.Resources.AppTileCompactVisibility = [Windows.Visibility]::Visible
-        $sync.Form.Resources.AppTileFontSize = [double]16
-        $sync.Form.Resources.AppTileMargins = [Windows.Thickness]5
-        $sync.Form.Resources.AppTileBorderThickness = [Windows.Thickness]1
-    }
-}
-# We need to update the app tile properties when the form is resized because to fill a WrapPanel update the width of the elemenmt manually (afaik)
-$sync.Form.Add_SizeChanged({
-    Update-AppTileProperties
-})
+Show-CTTLogo
 
 # Progress bar in taskbaritem > Set-WinUtilProgressbar
 $sync["Form"].TaskbarItemInfo = New-Object System.Windows.Shell.TaskbarItemInfo
@@ -246,65 +264,52 @@ $sync["Form"].Add_Closing({
 $sync.SearchBarClearButton.Add_Click({
     $sync.SearchBar.Text = ""
     $sync.SearchBarClearButton.Visibility = "Collapsed"
+
+    # Focus the search bar after clearing the text
+    $sync.SearchBar.Focus()
+    $sync.SearchBar.SelectAll()
 })
 
 # add some shortcuts for people that don't like clicking
 $commonKeyEvents = {
+    # Prevent shortcuts from executing if a process is already running
     if ($sync.ProcessRunning -eq $true) {
         return
     }
 
-    if ($_.Key -eq "Escape") {
-        $sync.SearchBar.SelectAll()
-        $sync.SearchBar.Text = ""
-        $sync.SearchBarClearButton.Visibility = "Collapsed"
-        return
+    # Handle key presses of single keys
+    switch ($_.Key) {
+        "Escape" { $sync.SearchBar.Text = "" }
     }
-
-    # don't ask, I know what I'm doing, just go...
-    if (($_.Key -eq "Q" -and $_.KeyboardDevice.Modifiers -eq "Ctrl")) {
-        $this.Close()
-    }
+    # Handle Alt key combinations for navigation
     if ($_.KeyboardDevice.Modifiers -eq "Alt") {
-        if ($_.SystemKey -eq "I") {
-            Invoke-WPFButton "WPFTab1BT"
-        }
-        if ($_.SystemKey -eq "T") {
-            Invoke-WPFButton "WPFTab2BT"
-        }
-        if ($_.SystemKey -eq "C") {
-            Invoke-WPFButton "WPFTab3BT"
-        }
-        if ($_.SystemKey -eq "U") {
-            Invoke-WPFButton "WPFTab4BT"
-        }
-        if ($_.SystemKey -eq "M") {
-            Invoke-WPFButton "WPFTab5BT"
-        }
-        if ($_.SystemKey -eq "P") {
-            Write-Host "Your Windows Product Key: $((Get-WmiObject -query 'select * from SoftwareLicensingService').OA3xOriginalProductKey)"
+        $keyEventArgs = $_
+        switch ($_.SystemKey) {
+            "I" { Invoke-WPFButton "WPFTab1BT"; $keyEventArgs.Handled = $true } # Navigate to Install tab and suppress Windows Warning Sound
+            "T" { Invoke-WPFButton "WPFTab2BT"; $keyEventArgs.Handled = $true } # Navigate to Tweaks tab
+            "C" { Invoke-WPFButton "WPFTab3BT"; $keyEventArgs.Handled = $true } # Navigate to Config tab
+            "U" { Invoke-WPFButton "WPFTab4BT"; $keyEventArgs.Handled = $true } # Navigate to Updates tab
+            "W" { Invoke-WPFButton "WPFTab5BT"; $keyEventArgs.Handled = $true } # Navigate to Win11ISO tab
         }
     }
-    # shortcut for the filter box
-    if ($_.Key -eq "F" -and $_.KeyboardDevice.Modifiers -eq "Ctrl") {
-        if ($sync.SearchBar.Text -eq "Ctrl-F to filter") {
-            $sync.SearchBar.SelectAll()
-            $sync.SearchBar.Text = ""
+    # Handle Ctrl key combinations for specific actions
+    if ($_.KeyboardDevice.Modifiers -eq "Ctrl") {
+        switch ($_.Key) {
+            "F" { $sync.SearchBar.Focus() } # Focus on the search bar
+            "Q" { $this.Close() } # Close the application
         }
-        $sync.SearchBar.Focus()
     }
 }
-
 $sync["Form"].Add_PreViewKeyDown($commonKeyEvents)
 
 $sync["Form"].Add_MouseLeftButtonDown({
-    Invoke-WPFPopup -Action "Hide" -Popups @("Settings", "Theme")
+    Invoke-WPFPopup -Action "Hide" -Popups @("Settings", "Theme", "FontScaling")
     $sync["Form"].DragMove()
 })
 
 $sync["Form"].Add_MouseDoubleClick({
-    if ($_.OriginalSource -is [System.Windows.Controls.Grid] -or
-        $_.OriginalSource -is [System.Windows.Controls.StackPanel]) {
+    if ($_.OriginalSource.Name -eq "NavDockPanel" -or
+        $_.OriginalSource.Name -eq "GridBesideNavDockPanel") {
             if ($sync["Form"].WindowState -eq [Windows.WindowState]::Normal) {
                 $sync["Form"].WindowState = [Windows.WindowState]::Maximized
             }
@@ -316,59 +321,10 @@ $sync["Form"].Add_MouseDoubleClick({
 
 $sync["Form"].Add_Deactivated({
     Write-Debug "WinUtil lost focus"
-    Invoke-WPFPopup -Action "Hide" -Popups @("Settings", "Theme")
+    Invoke-WPFPopup -Action "Hide" -Popups @("Settings", "Theme", "FontScaling")
 })
 
 $sync["Form"].Add_ContentRendered({
-
-    try {
-        [void][Window]
-    } catch {
-Add-Type @"
-        using System;
-        using System.Runtime.InteropServices;
-        public class Window {
-            [DllImport("user32.dll")]
-            public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
-
-            [DllImport("user32.dll")]
-            [return: MarshalAs(UnmanagedType.Bool)]
-            public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-
-            [DllImport("user32.dll")]
-            [return: MarshalAs(UnmanagedType.Bool)]
-            public static extern bool MoveWindow(IntPtr handle, int x, int y, int width, int height, bool redraw);
-
-            [DllImport("user32.dll")]
-            public static extern int GetSystemMetrics(int nIndex);
-        };
-        public struct RECT {
-            public int Left;   // x position of upper-left corner
-            public int Top;    // y position of upper-left corner
-            public int Right;  // x position of lower-right corner
-            public int Bottom; // y position of lower-right corner
-        }
-"@
-    }
-
-   foreach ($proc in (Get-Process).where{ $_.MainWindowTitle -and $_.MainWindowTitle -like "*titus*" }) {
-        # Check if the process's MainWindowHandle is valid
-        if ($proc.MainWindowHandle -ne [System.IntPtr]::Zero) {
-            Write-Debug "MainWindowHandle: $($proc.Id) $($proc.MainWindowTitle) $($proc.MainWindowHandle)"
-            $windowHandle = $proc.MainWindowHandle
-        } else {
-            Write-Warning "Process found, but no MainWindowHandle: $($proc.Id) $($proc.MainWindowTitle)"
-
-        }
-    }
-
-    $rect = New-Object RECT
-    [Window]::GetWindowRect($windowHandle, [ref]$rect)
-    $width  = $rect.Right  - $rect.Left
-    $height = $rect.Bottom - $rect.Top
-
-    Write-Debug "UpperLeft:$($rect.Left),$($rect.Top) LowerBottom:$($rect.Right),$($rect.Bottom). Width:$($width) Height:$($height)"
-
     # Load the Windows Forms assembly
     Add-Type -AssemblyName System.Windows.Forms
     $primaryScreen = [System.Windows.Forms.Screen]::PrimaryScreen
@@ -383,9 +339,12 @@ Add-Type @"
         Write-Debug "Primary Monitor Height: $screenHeight pixels"
 
         # Compare with the primary monitor size
-        if ($width -gt $screenWidth -or $height -gt $screenHeight) {
+        if ($sync.Form.ActualWidth -gt $screenWidth -or $sync.Form.ActualHeight -gt $screenHeight) {
             Write-Debug "The specified width and/or height is greater than the primary monitor size."
-            [void][Window]::MoveWindow($windowHandle, 0, 0, $screenWidth, $screenHeight, $True)
+            $sync.Form.Left = 0
+            $sync.Form.Top = 0
+            $sync.Form.Width = $screenWidth
+            $sync.Form.Height = $screenHeight
         } else {
             Write-Debug "The specified width and height are within the primary monitor size limits."
         }
@@ -393,83 +352,75 @@ Add-Type @"
         Write-Debug "Unable to retrieve information about the primary monitor."
     }
 
-    Invoke-WPFTab "WPFTab1BT"
+    if ($PARAM_OFFLINE) {
+        # Show offline banner
+        $sync.WPFOfflineBanner.Visibility = [System.Windows.Visibility]::Visible
+
+        # Disable the install tab
+        $sync.WPFTab1BT.IsEnabled = $false
+        $sync.WPFTab1BT.Opacity = 0.5
+        $sync.WPFTab1BT.ToolTip = "Internet connection required for installing applications"
+
+        # Disable install-related buttons
+        $sync.WPFInstall.IsEnabled = $false
+        $sync.WPFUninstall.IsEnabled = $false
+        $sync.WPFInstallUpgrade.IsEnabled = $false
+        $sync.WPFGetInstalled.IsEnabled = $false
+
+        # Show offline indicator
+        Write-Host "Offline mode detected - Install tab disabled" -ForegroundColor Yellow
+
+        # Optionally switch to a different tab if install tab was going to be default
+        Invoke-WPFTab "WPFTab2BT"  # Switch to Tweaks tab instead
+    }
+    else {
+        # Online - ensure install tab is enabled
+        $sync.WPFTab1BT.IsEnabled = $true
+        $sync.WPFTab1BT.Opacity = 1.0
+        $sync.WPFTab1BT.ToolTip = $null
+        Invoke-WPFTab "WPFTab1BT"  # Default to install tab
+    }
+
     $sync["Form"].Focus()
 
-    # maybe this is not the best place to load and execute config file?
-    # maybe community can help?
-    if ($PARAM_CONFIG) {
+   if ($PARAM_CONFIG -and -not [string]::IsNullOrWhiteSpace($PARAM_CONFIG)) {
+        Write-Host "Running config file tasks..."
         Invoke-WPFImpex -type "import" -Config $PARAM_CONFIG
         if ($PARAM_RUN) {
-            while ($sync.ProcessRunning) {
-                Start-Sleep -Seconds 5
-            }
-            Start-Sleep -Seconds 5
-
-            Write-Host "Applying tweaks..."
-            Invoke-WPFtweaksbutton
-            while ($sync.ProcessRunning) {
-                Start-Sleep -Seconds 5
-            }
-            Start-Sleep -Seconds 5
-
-            Write-Host "Installing features..."
-            Invoke-WPFFeatureInstall
-            while ($sync.ProcessRunning) {
-                Start-Sleep -Seconds 5
-            }
-
-            Start-Sleep -Seconds 5
-            Write-Host "Installing applications..."
-            while ($sync.ProcessRunning) {
-                Start-Sleep -Seconds 1
-            }
-            Invoke-WPFInstall
-            Start-Sleep -Seconds 5
-
-            Write-Host "Done."
+            Invoke-WinUtilAutoRun
         }
     }
 
 })
 
-# Add event handlers for the RadioButtons
-$sync["ISOdownloader"].add_Checked({
-    $sync["ISORelease"].Visibility = [System.Windows.Visibility]::Visible
-    $sync["ISOLanguage"].Visibility = [System.Windows.Visibility]::Visible
+# The SearchBarTimer is used to delay the search operation until the user has stopped typing for a short period
+# This prevents the ui from stuttering when the user types quickly as it dosnt need to update the ui for every keystroke
+
+$searchBarTimer = New-Object System.Windows.Threading.DispatcherTimer
+$searchBarTimer.Interval = [TimeSpan]::FromMilliseconds(300)
+$searchBarTimer.IsEnabled = $false
+
+$searchBarTimer.add_Tick({
+    $searchBarTimer.Stop()
+    switch ($sync.currentTab) {
+        "Install" {
+            Find-AppsByNameOrDescription -SearchString $sync.SearchBar.Text
+        }
+        "Tweaks" {
+            Find-TweaksByNameOrDescription -SearchString $sync.SearchBar.Text
+        }
+    }
 })
-
-$sync["ISOmanual"].add_Checked({
-    $sync["ISORelease"].Visibility = [System.Windows.Visibility]::Collapsed
-    $sync["ISOLanguage"].Visibility = [System.Windows.Visibility]::Collapsed
-})
-
-$sync["ISORelease"].Items.Add("24H2") | Out-Null
-$sync["ISORelease"].SelectedItem = "24H2"
-
-$sync["ISOLanguage"].Items.Add("System Language ($(Microwin-GetLangFromCulture -langName $((Get-Culture).Name)))") | Out-Null
-if ($currentCulture -ne "English International") {
-    $sync["ISOLanguage"].Items.Add("English International") | Out-Null
-}
-if ($currentCulture -ne "English") {
-    $sync["ISOLanguage"].Items.Add("English") | Out-Null
-}
-if ($sync["ISOLanguage"].Items.Count -eq 1) {
-    $sync["ISOLanguage"].IsEnabled = $false
-}
-$sync["ISOLanguage"].SelectedIndex = 0
-
 $sync["SearchBar"].Add_TextChanged({
     if ($sync.SearchBar.Text -ne "") {
         $sync.SearchBarClearButton.Visibility = "Visible"
     } else {
         $sync.SearchBarClearButton.Visibility = "Collapsed"
     }
-    switch ($sync.currentTab) {
-        "Install" {
-            Find-AppsByNameOrDescription -SearchString $sync.SearchBar.Text
-        }
+    if ($searchBarTimer.IsEnabled) {
+        $searchBarTimer.Stop()
     }
+    $searchBarTimer.Start()
 })
 
 $sync["Form"].Add_Loaded({
@@ -482,17 +433,9 @@ $sync["Form"].Add_Loaded({
 $NavLogoPanel = $sync["Form"].FindName("NavLogoPanel")
 $NavLogoPanel.Children.Add((Invoke-WinUtilAssets -Type "logo" -Size 25)) | Out-Null
 
-# Initialize the hashtable
-$winutildir = @{}
 
-# Set the path for the winutil directory
-$winutildir["path"] = "$env:LOCALAPPDATA\winutil\"
-[System.IO.Directory]::CreateDirectory($winutildir["path"]) | Out-Null
-
-$winutildir["logo.ico"] = $winutildir["path"] + "cttlogo.ico"
-
-if (Test-Path $winutildir["logo.ico"]) {
-    $sync["logorender"] = $winutildir["logo.ico"]
+if (Test-Path "$winutildir\logo.ico") {
+    $sync["logorender"] = "$winutildir\logo.ico"
 } else {
     $sync["logorender"] = (Invoke-WinUtilAssets -Type "Logo" -Size 90 -Render)
 }
@@ -507,58 +450,55 @@ $sync["Form"].Add_Activated({
 
 $sync["ThemeButton"].Add_Click({
     Write-Debug "ThemeButton clicked"
-    Invoke-WPFPopup -PopupActionTable @{ "Settings" = "Hide"; "Theme" = "Toggle" }
-    $_.Handled = $false
+    Invoke-WPFPopup -PopupActionTable @{ "Settings" = "Hide"; "Theme" = "Toggle"; "FontScaling" = "Hide" }
 })
 $sync["AutoThemeMenuItem"].Add_Click({
     Write-Debug "About clicked"
     Invoke-WPFPopup -Action "Hide" -Popups @("Theme")
     Invoke-WinutilThemeChange -theme "Auto"
-    $_.Handled = $false
 })
 $sync["DarkThemeMenuItem"].Add_Click({
     Write-Debug "Dark Theme clicked"
     Invoke-WPFPopup -Action "Hide" -Popups @("Theme")
     Invoke-WinutilThemeChange -theme "Dark"
-    $_.Handled = $false
 })
 $sync["LightThemeMenuItem"].Add_Click({
     Write-Debug "Light Theme clicked"
     Invoke-WPFPopup -Action "Hide" -Popups @("Theme")
     Invoke-WinutilThemeChange -theme "Light"
-    $_.Handled = $false
 })
-
 
 $sync["SettingsButton"].Add_Click({
     Write-Debug "SettingsButton clicked"
-    Invoke-WPFPopup -PopupActionTable @{ "Settings" = "Toggle"; "Theme" = "Hide" }
-    $_.Handled = $false
+    Invoke-WPFPopup -PopupActionTable @{ "Settings" = "Toggle"; "Theme" = "Hide"; "FontScaling" = "Hide" }
 })
 $sync["ImportMenuItem"].Add_Click({
     Write-Debug "Import clicked"
     Invoke-WPFPopup -Action "Hide" -Popups @("Settings")
     Invoke-WPFImpex -type "import"
-    $_.Handled = $false
 })
 $sync["ExportMenuItem"].Add_Click({
     Write-Debug "Export clicked"
     Invoke-WPFPopup -Action "Hide" -Popups @("Settings")
     Invoke-WPFImpex -type "export"
-    $_.Handled = $false
 })
 $sync["AboutMenuItem"].Add_Click({
     Write-Debug "About clicked"
     Invoke-WPFPopup -Action "Hide" -Popups @("Settings")
 
     $authorInfo = @"
-Author   : <a href="https://github.com/ChrisTitusTech">@christitustech</a>
-Runspace : <a href="https://github.com/DeveloperDurp">@DeveloperDurp</a>
-MicroWin : <a href="https://github.com/KonTy">@KonTy</a>, <a href="https://github.com/CodingWonders">@CodingWonders</a>
+Author   : <a href="https://github.com/ChrisTitusTech">@ChrisTitusTech</a>
+UI       : <a href="https://github.com/MyDrift-user">@MyDrift-user</a>, <a href="https://github.com/Marterich">@Marterich</a>
+Runspace : <a href="https://github.com/DeveloperDurp">@DeveloperDurp</a>, <a href="https://github.com/Marterich">@Marterich</a>
 GitHub   : <a href="https://github.com/ChrisTitusTech/winutil">ChrisTitusTech/winutil</a>
 Version  : <a href="https://github.com/ChrisTitusTech/winutil/releases/tag/$($sync.version)">$($sync.version)</a>
 "@
     Show-CustomDialog -Title "About" -Message $authorInfo
+})
+$sync["DocumentationMenuItem"].Add_Click({
+    Write-Debug "Documentation clicked"
+    Invoke-WPFPopup -Action "Hide" -Popups @("Settings")
+    Start-Process "https://winutil.christitus.com/"
 })
 $sync["SponsorMenuItem"].Add_Click({
     Write-Debug "Sponsors clicked"
@@ -579,7 +519,85 @@ $sync["SponsorMenuItem"].Add_Click({
     Show-CustomDialog -Title "Sponsors" -Message $authorInfo -EnableScroll $true
 })
 
+# Font Scaling Event Handlers
+$sync["FontScalingButton"].Add_Click({
+    Write-Debug "FontScalingButton clicked"
+    Invoke-WPFPopup -PopupActionTable @{ "Settings" = "Hide"; "Theme" = "Hide"; "FontScaling" = "Toggle" }
+})
 
+$sync["FontScalingSlider"].Add_ValueChanged({
+    param($slider)
+    $percentage = [math]::Round($slider.Value * 100)
+    $sync.FontScalingValue.Text = "$percentage%"
+})
+
+$sync["FontScalingResetButton"].Add_Click({
+    Write-Debug "FontScalingResetButton clicked"
+    $sync.FontScalingSlider.Value = 1.0
+    $sync.FontScalingValue.Text = "100%"
+})
+
+$sync["FontScalingApplyButton"].Add_Click({
+    Write-Debug "FontScalingApplyButton clicked"
+    $scaleFactor = $sync.FontScalingSlider.Value
+    Invoke-WinUtilFontScaling -ScaleFactor $scaleFactor
+    Invoke-WPFPopup -Action "Hide" -Popups @("FontScaling")
+})
+
+# ── Win11ISO Tab button handlers ──────────────────────────────────────────────
+
+$sync["WPFTab5BT"].Add_Click({
+    $sync["Form"].Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Background, [action]{ Invoke-WinUtilISOCheckExistingWork }) | Out-Null
+})
+
+$sync["WPFWin11ISOBrowseButton"].Add_Click({
+    Write-Debug "WPFWin11ISOBrowseButton clicked"
+    Invoke-WinUtilISOBrowse
+})
+
+$sync["WPFWin11ISODownloadLink"].Add_Click({
+    Write-Debug "WPFWin11ISODownloadLink clicked"
+    Start-Process "https://www.microsoft.com/software-download/windows11"
+})
+
+$sync["WPFWin11ISOMountButton"].Add_Click({
+    Write-Debug "WPFWin11ISOMountButton clicked"
+    Invoke-WinUtilISOMountAndVerify
+})
+
+$sync["WPFWin11ISOModifyButton"].Add_Click({
+    Write-Debug "WPFWin11ISOModifyButton clicked"
+    Invoke-WinUtilISOModify
+})
+
+$sync["WPFWin11ISOChooseISOButton"].Add_Click({
+    Write-Debug "WPFWin11ISOChooseISOButton clicked"
+    $sync["WPFWin11ISOOptionUSB"].Visibility = "Collapsed"
+    Invoke-WinUtilISOExport
+})
+
+$sync["WPFWin11ISOChooseUSBButton"].Add_Click({
+    Write-Debug "WPFWin11ISOChooseUSBButton clicked"
+    $sync["WPFWin11ISOOptionUSB"].Visibility = "Visible"
+    Invoke-WinUtilISORefreshUSBDrives
+})
+
+$sync["WPFWin11ISORefreshUSBButton"].Add_Click({
+    Write-Debug "WPFWin11ISORefreshUSBButton clicked"
+    Invoke-WinUtilISORefreshUSBDrives
+})
+
+$sync["WPFWin11ISOWriteUSBButton"].Add_Click({
+    Write-Debug "WPFWin11ISOWriteUSBButton clicked"
+    Invoke-WinUtilISOWriteUSB
+})
+
+$sync["WPFWin11ISOCleanResetButton"].Add_Click({
+    Write-Debug "WPFWin11ISOCleanResetButton clicked"
+    Invoke-WinUtilISOCleanAndReset
+})
+
+# ──────────────────────────────────────────────────────────────────────────────
 
 $sync["Form"].ShowDialog() | out-null
 Stop-Transcript

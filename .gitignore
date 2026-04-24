@@ -11,6 +11,9 @@
 
 winutil.pdb
 
+### Preprocessor Hashes ###
+.preprocessor_hashes.json
+
 ### Windows ###
 
 # Folder config file
@@ -29,6 +32,7 @@ ooshutup10.cfg
 winutil.exe.config
 Microsoft.UI.Xaml*
 license1.xml
+winutil.ps1
 
 # Libraries
 System.Management.Automation.dll
@@ -41,8 +45,18 @@ Microsoft.PowerShell.ConsoleHost.dll
 
 # General
 .DS_Store
-microwin.log
 True
 test.ps1
+winutil.ps1
+
+# temporary excludes for docs
+.github/site/
 
 binary/
+
+.preprocessor_hashes.json
+
+# Hugo Files
+docs/public/
+docs/.hugo_build.lock
+docs/resources/
